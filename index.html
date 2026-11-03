@@ -33,7 +33,9 @@ td{padding:7px 4px;border-bottom:1px solid var(--line);vertical-align:middle;}
 <body>
 <div class="wrap" id="app"><div class="msg info">Lade Deal …</div></div>
 <script type="module">
-import AppExtensionsSDK, { Command } from 'https://cdn.jsdelivr.net/npm/@pipedrive/app-extensions-sdk@0.16.1/+esm';
+import * as SDKModul from 'https://cdn.jsdelivr.net/npm/@pipedrive/app-extensions-sdk@0.16.1/+esm';
+const AppExtensionsSDK = (SDKModul.default && SDKModul.default.default) || SDKModul.default;
+const Command = SDKModul.Command;
 
 const API = 'https://automation.vrex.gg/webhook/roller-buchen-api';
 const app = document.getElementById('app');
@@ -145,7 +147,7 @@ async function buchen() {
 
 (async function () {
   try { sdk = await new AppExtensionsSDK().initialize({ size: { height: 680 } }); }
-  catch (e) { app.innerHTML = '<div class="msg err">Diese Seite funktioniert nur innerhalb von Pipedrive.</div>'; return; }
+  catch (e) { app.innerHTML = '<div class="msg err">Diese Seite funktioniert nur innerhalb von Pipedrive.<br><small>' + esc(e && e.message) + '</small></div>'; return; }
   if (!dealId) { app.innerHTML = '<div class="msg err">Kein Deal ausgewählt.</div>'; return; }
   try {
     const d = await api('deal');
