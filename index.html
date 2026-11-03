@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>In ROLLER buchen</title>
+<style>
+:root{--bg:#ffffff;--fg:#1b1f23;--muted:#6a6d70;--line:#e3e5e8;--accent:#0b6b3a;--accent-bg:#e9f5ee;--err:#b42318;--err-bg:#fdecea;}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);}
+.wrap{padding:16px 20px 24px;}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:18px 0 8px;font-weight:600;}
+.titel{font-size:16px;font-weight:600;margin-bottom:2px;}
+.muted{color:var(--muted);}
+input{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--fg);}
+table{width:100%;border-collapse:collapse;}
+td{padding:7px 4px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.qty{width:72px;text-align:right;}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;}
+.slot{border:1px solid var(--line);border-radius:6px;padding:7px 4px;text-align:center;cursor:pointer;background:#fff;font:inherit;color:var(--fg);}
+.slot small{display:block;color:var(--muted);font-size:11px;}
+.slot.sel{border-color:var(--accent);background:var(--accent-bg);font-weight:600;}
+.slot:disabled{opacity:.4;cursor:not-allowed;}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:10px 18px;font:inherit;font-weight:600;cursor:pointer;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+.msg{padding:10px 12px;border-radius:6px;margin:10px 0;}
+.ok{background:var(--accent-bg);color:var(--accent);}
+.err{background:var(--err-bg);color:var(--err);}
+.info{background:#f4f5f7;color:var(--muted);}
+.warn{color:var(--err);}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="msg info">Lade Deal …</div></div>
+<script type="module">
+import AppExtensionsSDK, { Command } from 'https://cdn.jsdelivr.net/npm/@pipedrive/app-extensions-sdk@0.16.1/+esm';
+
+const API = 'https://automation.vrex.gg/webhook/roller-buchen-api';
+const app = document.getElementById('app');
+const params = new URLSearchParams(location.search);
+const dealId = (params.get('selectedIds') || params.get('dealId') || '').split(',')[0];
+let sdk = null;
+const state = { deal: null, items: [], date: '', slot: null, slots: [], laden: false, fehlerSlots: '' };
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+async function api(action, data) {
+  const t = await sdk.execute(Command.GET_SIGNED_TOKEN);
+  const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ action: action, token: t.token, dealId: dealId }, data || {})) });
+  if (!r.ok) throw new Error('Server antwortet mit Fehler ' + r.status);
+  return r.json();
+}
+
+function rollerItems() {
+  return state.items.filter(function (i) { return i.rollerId; }).map(function (i) { return { productId: i.rollerId, quantity: Number(i.menge) || 1 }; });
+}
+
+function kannBuchen() {
+  const k = state.deal ? state.deal.kunde : {};
+  return !!(state.date && state.slot && rollerItems().length && k.email && k.phone);
+}
+
+function slotsHtml() {
+  if (!rollerItems().length) return '<div class="msg info">Am Deal ist kein Produkt, das nach ROLLER übertragen werden kann.</div>';
+  if (!state.date) return '<div class="msg info">Bitte zuerst ein Datum wählen.</div>';
+  if (state.laden) return '<div class="msg info">Lade freie Startzeiten aus ROLLER …</div>';
+  if (state.fehlerSlots) return '<div class="msg err">' + esc(state.fehlerSlots) + '</div>';
+  if (!state.slots.length) return '<div class="msg info">An diesem Tag gibt es für diese Produkte keine Startzeiten.</div>';
+  return '<div class="slots">' + state.slots.map(function (s) {
+    const kap = s.kapazitaet == null ? '' : (s.kapazitaet + ' frei');
+    return '<button class="slot' + (state.slot === s.startTime ? ' sel' : '') + '" data-slot="' + esc(s.startTime) + '"' + (s.frei ? '' : ' disabled') + '>' + esc(s.startTime) + '<small>bis ' + esc(s.endTime) + (kap ? ' · ' + esc(kap) : '') + '</small></button>';
+  }).join('') + '</div>';
+}
+
+function renderSlots() {
+  const el = document.getElementById('slots');
+  if (!el) return;
+  el.innerHTML = slotsHtml();
+  el.querySelectorAll('.slot').forEach(function (b) {
+    b.addEventListener('click', function () { state.slot = b.getAttribute('data-slot'); renderSlots(); });
+  });
+  const btn = document.getElementById('book');
+  if (btn) btn.disabled = !kannBuchen();
+}
+
+function render() {
+  const d = state.deal;
+  if (d.buchungsnummer) {
+    app.innerHTML = '<div class="titel">' + esc(d.deal.titel) + '</div><div class="msg ok">Dieser Deal ist bereits in ROLLER gebucht.<br>Buchungsnummer: <b>' + esc(d.buchungsnummer) + '</b></div>';
+    return;
+  }
+  const k = d.kunde;
+  let h = '<div class="titel">' + esc(d.deal.titel) + '</div>';
+  h += '<h2>Kunde</h2><div>' + esc((k.firstName || '') + ' ' + (k.lastName || '')) + '</div>';
+  h += '<div class="' + (k.email ? 'muted' : 'warn') + '">' + esc(k.email || 'Keine E-Mail-Adresse an der Kontaktperson') + '</div>';
+  h += '<div class="' + (k.phone ? 'muted' : 'warn') + '">' + esc(k.phone || 'Keine Telefonnummer an der Kontaktperson (Pflicht in ROLLER)') + '</div>';
+  h += '<h2>Produkte</h2><table>';
+  state.items.forEach(function (it, i) {
+    h += '<tr><td>' + esc(it.name) + '</td><td style="text-align:right">' + (it.rollerId ? '<input class="qty" type="number" min="1" data-i="' + i + '" value="' + esc(it.menge) + '">' : '<span class="muted">wird nicht übertragen</span>') + '</td></tr>';
+  });
+  if (!state.items.length) h += '<tr><td class="muted">Keine Produkte am Deal</td></tr>';
+  h += '</table>';
+  h += '<h2>Datum</h2><input type="date" id="date" value="' + esc(state.date) + '">';
+  h += '<h2>Startzeit</h2><div id="slots"></div>';
+  h += '<div id="out"></div><div style="margin-top:16px"><button class="btn" id="book">In ROLLER buchen</button></div>';
+  app.innerHTML = h;
+  document.getElementById('date').addEventListener('change', function (e) { state.date = e.target.value; state.slot = null; ladeSlots(); });
+  app.querySelectorAll('.qty').forEach(function (inp) {
+    inp.addEventListener('change', function () { state.items[Number(inp.getAttribute('data-i'))].menge = Math.max(1, Number(inp.value) || 1); ladeSlots(); });
+  });
+  document.getElementById('book').addEventListener('click', buchen);
+  renderSlots();
+}
+
+async function ladeSlots() {
+  if (!state.date || !rollerItems().length) { renderSlots(); return; }
+  state.laden = true; state.fehlerSlots = ''; renderSlots();
+  try {
+    const res = await api('slots', { date: state.date, items: rollerItems() });
+    state.slots = res.slots || [];
+    if (state.slot && !state.slots.some(function (s) { return s.startTime === state.slot && s.frei; })) state.slot = null;
+  } catch (e) { state.fehlerSlots = e.message; state.slots = []; }
+  state.laden = false; renderSlots();
+}
+
+async function buchen() {
+  const btn = document.getElementById('book');
+  const out = document.getElementById('out');
+  btn.disabled = true;
+  out.innerHTML = '<div class="msg info">Buchung wird in ROLLER angelegt …</div>';
+  try {
+    const res = await api('book', { date: state.date, startTime: state.slot, items: rollerItems(), customer: state.deal.kunde });
+    if (res.ok) {
+      app.innerHTML = '<div class="titel">' + esc(state.deal.deal.titel) + '</div><div class="msg ok">Buchung in ROLLER angelegt.<br>Buchungsnummer: <b>' + esc(res.bookingReference) + '</b><br>' + esc(state.date.split('-').reverse().join('.')) + ' um ' + esc(state.slot) + '</div><div class="muted">Buchungsnummer, Datum und Startzeit stehen jetzt im Deal. Du kannst das Fenster schließen.</div>';
+      try { await sdk.execute(Command.SHOW_SNACKBAR, { message: 'ROLLER-Buchung ' + res.bookingReference + ' angelegt' }); } catch (e) {}
+    } else {
+      out.innerHTML = '<div class="msg err">' + esc(res.error || 'Buchung fehlgeschlagen') + '</div>';
+      btn.disabled = !kannBuchen();
+    }
+  } catch (e) {
+    out.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>';
+    btn.disabled = !kannBuchen();
+  }
+}
+
+(async function () {
+  try { sdk = await new AppExtensionsSDK().initialize({ size: { height: 680 } }); }
+  catch (e) { app.innerHTML = '<div class="msg err">Diese Seite funktioniert nur innerhalb von Pipedrive.</div>'; return; }
+  if (!dealId) { app.innerHTML = '<div class="msg err">Kein Deal ausgewählt.</div>'; return; }
+  try {
+    const d = await api('deal');
+    if (!d.ok) throw new Error(d.error || 'Deal konnte nicht geladen werden');
+    state.deal = d; state.items = d.positionen || []; state.date = d.datum || ''; state.slot = d.startzeit || null;
+    render();
+    if (state.date) ladeSlots();
+  } catch (e) { app.innerHTML = '<div class="msg err">' + esc(e.message) + '</div>'; }
+})();
+</script>
+</body>
+</html>
